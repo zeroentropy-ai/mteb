@@ -51,6 +51,7 @@ from .retrieval_dataset_loaders import (
     RetrievalSplitData,
     _combine_queries_with_instructions_datasets,
 )
+from ...mteb_results import get_collector
 
 logger = logging.getLogger(__name__)
 
@@ -357,6 +358,23 @@ class AbsTaskRetrieval(AbsTask):
             **kwargs,
         )
 
+        #########################################
+        # LOAD DATASET INTO COLLECTOR
+        #########################################
+        collector = get_collector()
+        for doc in data_split["corpus"]:
+            document_text = "\n".join([doc.get("title", ""), doc["text"]])
+            collector.add_document(doc["id"], document_text)
+
+        for query in data_split["queries"]:
+            query_id = query["id"]
+            query_text = query["text"]
+            collector.add_query(query_id, query_text)
+            # add qrels
+            for doc_id, gt_score in data_split["relevant_docs"].get(query_id, {}).items():
+                if gt_score > 0:
+                    collector.add_query_rel(query_id, doc_id, gt_score)
+
         if isinstance(model, EncoderProtocol) and not isinstance(model, SearchProtocol):
             search_model = SearchEncoderWrapper(model)
         elif isinstance(model, CrossEncoderProtocol):
@@ -377,6 +395,11 @@ class AbsTaskRetrieval(AbsTask):
         logger.debug(
             f"Running retrieval task - Time taken to retrieve: {end_time - start_time:.2f} seconds"
         )
+
+        # INSERT SCORES INTO COLLECTOR
+        for query_id, doc_scores in results.items():
+            for doc_id, score in doc_scores.items():
+                collector.add_query_doc_score(query_id, doc_id, score)
 
         if prediction_folder:
             self._save_task_predictions(
