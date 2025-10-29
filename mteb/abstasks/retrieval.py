@@ -51,7 +51,7 @@ from .retrieval_dataset_loaders import (
     RetrievalSplitData,
     _combine_queries_with_instructions_datasets,
 )
-from ...mteb_results import get_collector
+from mteb.collector import get_collector
 
 logger = logging.getLogger(__name__)
 
