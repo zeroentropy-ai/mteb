@@ -37,6 +37,21 @@ def compute_ndcg_at_k(queries: List[MTEBQueryModel], k: int) -> float:
     average_ndcg = sum(ncdg_scores) / len(ncdg_scores) if ncdg_scores else 0.0
     return average_ndcg
 
+def compute_recall_at_k(queries: List[MTEBQueryModel], k: int) -> float:
+    recall_scores = []
+    for query in queries:
+        num_relevant = sum(query.metadata['gt_scores'])
+        if num_relevant == 0:
+            continue
+
+        sorted_docs = sorted(query.documents, key=lambda d: d.metadata.get('score', 0), reverse=True)
+        retrieved_relevant = sum(doc.metadata.get('gt_score', 0) for doc in sorted_docs[:k])
+        
+        recall_scores.append(retrieved_relevant / num_relevant)
+    
+    average_recall = sum(recall_scores) / len(recall_scores) if recall_scores else 0.0
+    return average_recall
+    
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process MTEB JSONL and report appropriate metric for each dataset.")
     parser.add_argument("filename", type=str, help="Path to the input JSONL file.")
@@ -60,7 +75,7 @@ if __name__ == "__main__":
         if any(q.metadata['metric'] != metric for q in queries):
             print(f"SKIPPING {dataset_id}: Inconsistent scoring metrics.")
             continue 
-        
+
         if metric.startswith('ndcg_at_'):
             k = metric.removeprefix('ndcg_at_')
             assert k.isnumeric(), f"Invalid NDCG metric format: {metric}"
@@ -69,6 +84,9 @@ if __name__ == "__main__":
             print(f"Average NDCG@{k} for {dataset_id}: {avg_ndcg:.2f}%")
 
         elif metric.startswith('recall_at_'):
-            print(f"Recall metric processing not implemented yet for {dataset_id}.")
+            k = metric.removeprefix('recall_at_')
+            assert k.isnumeric(), f"Invalid Recall metric format: {metric}"
 
-
+            avg_recall = round(compute_recall_at_k(queries, int(k)) * 100, 2)
+            print(f"Average Recall@{k} for {dataset_id}: {avg_recall:.2f}%")
+            
