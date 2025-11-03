@@ -23,6 +23,7 @@ from ._metadata import (
 )
 from ._result import HFSubset, RetrievalEvaluationResult, Score, ScoresDict, SplitName
 from ._string_validators import StrDate, StrURL
+from ._exports import DocumentExportModel, QueryExportModel
 
 __all__ = [
     "Array",
@@ -30,6 +31,7 @@ __all__ = [
     "Conversation",
     "ConversationTurn",
     "CorpusDatasetType",
+    "DocumentExportModel",
     "HFSubset",
     "ISOLanguage",
     "ISOLanguageScript",
@@ -40,6 +42,7 @@ __all__ = [
     "Modalities",
     "ModelName",
     "PromptType",
+    "QueryExportModel",
     "QueryDatasetType",
     "RelevantDocumentsType",
     "RetrievalEvaluationResult",

@@ -1,105 +1,103 @@
 from pathlib import Path
 from typing import List, Dict, Any
 from pydantic import BaseModel
-
-# These will be set by the main script
-DATASET_NAME = None
-SCORING_METRIC = None
-TOP_K = 100
-
-
-class MTEBDocumentModel(BaseModel):
-    id: str
-    content: str
-    metadata: Dict[str, float]
-
-
-class MTEBQueryModel(BaseModel):
-    id: str
-    query: str
-    metadata: Dict[str, Any]
-    documents: List[MTEBDocumentModel]
-
+from mteb.types import (
+    CorpusDatasetType,
+    QueryDatasetType,
+    RelevantDocumentsType,
+    DocumentExportModel,
+    QueryExportModel,
+)
+from random import Random
+from .utils import ROOT
 
 class MTEBDataCollector:
-    def __init__(self):
-        self.qmodels: Dict[str, MTEBQueryModel] = {}
-        self.doc_content: Dict[str, str] = {}
-        self.doc_rel_qs: Dict[str, set] = {}
+    def __init__(
+        self,
+        corpus: CorpusDatasetType,
+        queries: QueryDatasetType,
+        qrels: RelevantDocumentsType,
+        results: dict[str, dict[str, float]],
+        dataset_name: str,
+        scoring_metric: str,
+        hf_split: str,
+        hf_subset: str,
+        top_k: int = 100,
+        max_queries: int = 1000,
+        **kwargs,
+    ) -> None:
+        self.corpus = corpus
+        self.queries = queries
+        self.qrels = qrels
+        self.results = results
 
-    def add_query(self, query_id: str, query_text: str):
-        if query_id not in self.qmodels:
-            self.qmodels[query_id] = MTEBQueryModel(
-                id=query_id,
-                query=query_text,
+        self.dataset_name = dataset_name
+        self.scoring_metric = scoring_metric
+        self.hf_split = hf_split
+        self.hf_subset = hf_subset
+        self.top_k = top_k
+        self.max_queries = max_queries
+
+        self.qmodels: List[QueryExportModel] = []
+
+
+    def prepare(self):
+        # Sample queries from result set
+        seed = '||'.join([self.dataset_name, self.hf_split, self.hf_subset])
+        self.rng = Random(seed)
+
+        sampled_qids = self.rng.sample(
+            list(self.results.keys()),
+            min(len(self.results), self.max_queries)
+        )
+        self.sampled_results = {qid: self.results[qid] for qid in sampled_qids}
+
+        query_id_to_idx = {q['id']: i for i, q in enumerate(self.queries)}
+        doc_id_to_idx = {d['id']: i for i, d in enumerate(self.corpus)}
+
+        # Collect queries and results
+        for qid, retrieved_docs in self.sampled_results.items():
+            query_gt_scores = self.qrels.get(qid, {}).values()
+            query_data = QueryExportModel(
+                id=qid,
+                query=self.queries[query_id_to_idx[qid]]['text'],
                 metadata={
-                    "dataset_id": DATASET_NAME,
-                    "metric": SCORING_METRIC,
-                    "gt_scores": []
+                    "dataset_id": self.dataset_name,
+                    "hf_split": self.hf_split,
+                    "hf_subset": self.hf_subset,
+                    "metric": self.scoring_metric,
+                    "gt_scores": list(query_gt_scores)
                 },
                 documents=[]
             )
+            # relevant docs sorted by descending score
+            top_k_docs = sorted(retrieved_docs.items(), key=lambda item: item[1], reverse=True)[:self.top_k]
 
-    def add_document(self, doc_id: str, content: str):
-        if doc_id in self.doc_content:
-            print(f"Document {doc_id} already found.")
-            return
-        self.doc_content[doc_id] = content
-        self.doc_rel_qs[doc_id] = set()
+            for doc_id, cosine_score in top_k_docs:
+                query_data.documents.append(
+                    DocumentExportModel(
+                        id=doc_id,
+                        content=self.corpus[doc_id_to_idx[doc_id]]['text'],
+                        metadata={
+                            "score": cosine_score,
+                            "gt_score": self.qrels.get(qid, {}).get(doc_id, 0),
+                        }
+                    )
+                )
+            self.qmodels.append(query_data)
+        
+        print(f"Prepared {len(self.qmodels)} queries for dataset {self.dataset_name}/{self.hf_split}/{self.hf_subset}.")
+        print(f"Preparing to write to {self.ze_results_path()}")
 
-    def add_query_rel(self, query_id: str, doc_id: str, gt_score: float):
-        if doc_id in self.doc_content and query_id in self.qmodels:
-            if query_id not in self.doc_rel_qs[doc_id]:
-                self.doc_rel_qs[doc_id].add(query_id)
-                self.qmodels[query_id].metadata["gt_scores"].append(gt_score)
+    def ze_results_path(self) -> Path:
+        return Path(ROOT) / "data" / self.dataset_name / self.hf_split / self.hf_subset / "ze_results.jsonl" 
 
-    def add_query_doc_score(self, query_id: str, doc_id: str, score: float):
-        gt_score = 1 if query_id in self.doc_rel_qs.get(doc_id, set()) else 0
-        if query_id in self.qmodels and doc_id in self.doc_content:
-            doc_model = MTEBDocumentModel(
-                id=doc_id,
-                content=self.doc_content[doc_id],
-                metadata={
-                    "score": score,
-                    "gt_score": gt_score
-                }
-            )
-            self.qmodels[query_id].documents.append(doc_model)
-
-    def prepare(self):
-        for qid, qmodel in self.qmodels.items():
-            qmodel.documents.sort(key=lambda doc: doc.metadata["score"], reverse=True)
-            qmodel.documents = qmodel.documents[:TOP_K]
-
-    def dump_to_json(self, file_path: Path, overwrite: bool = False):
+    def write_jsonl(self, overwrite: bool = True):
+        file_path = self.ze_results_path()
         file_path.parent.mkdir(parents=True, exist_ok=True)
 
         mode = 'w' if overwrite else 'a'
-        with open(file_path, mode, encoding='utf-8') as f:
-            for query_data in self.qmodels.values():
-                f.write(query_data.model_dump_json() + '\n')
-        print(f"Dumped {DATASET_NAME} retrieval data to {file_path}")
-
-    def __repr__(self):
-        return f"MTEBDataCollector(dataset={DATASET_NAME}, queries={len(self.qmodels)}, docs={len(self.doc_content)})"
-
-
-# Global registry of collectors
-_collectors = {}
-
-
-def get_collector(name: str = 'default') -> MTEBDataCollector:
-    """
-    Get or create a data collector by name.
-
-    This ensures the same collector instance is used throughout the codebase.
-
-    Args:
-        name: Name of the collector (use different names for different purposes)
-
-    Returns:
-        MTEBDataCollector instance
-    """
-    if name not in _collectors:
-        _collectors[name] = MTEBDataCollector()
-    return _collectors[name]
+        with open(file_path, mode) as f:
+            for query_data in self.qmodels:
+                f.write(query_data.model_dump_json().strip() + '\n')
+        print(f"Wrote {len(self.qmodels)} queries to {file_path}")

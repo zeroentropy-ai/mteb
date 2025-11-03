@@ -6,6 +6,8 @@ from mteb.abstasks.task_metadata import TaskMetadata
 from mteb.models import SearchProtocol
 from mteb.types import (
     CorpusDatasetType,
+    DocumentExportModel,
+    QueryExportModel,
     QueryDatasetType,
     RelevantDocumentsType,
     RetrievalEvaluationResult,
@@ -17,6 +19,8 @@ from .evaluator import Evaluator
 from .retrieval_metrics import (
     calculate_retrieval_scores,
 )
+
+from ..collector import MTEBDataCollector
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +94,45 @@ class RetrievalEvaluator(Evaluator):
             logger.debug(
                 "For evaluation, we DO NOT ignore identical query and document ids (default), please explicitly set ``ignore_identical_ids=True`` to ignore this."
             )
+
+        ###################################################
+        ### WE SHOULD HAVE EVERYTHING THAT WE NEED HERE ###
+        ###################################################
+        '''
+        print(f"Calculating retrieval scores for {self.hf_split}/{self.hf_subset} with {len(results)} queries and qrels for {len(qrels)} queries.")
+        doc_id_to_idx = {doc["id"]: idx for idx, doc in enumerate(self.corpus)}
+        query_id_to_idx = {query["id"]: idx for idx, query in enumerate(self.queries)}
+
+        # print some portion of first query/high scoring documents to verify
+        printed = 0
+        for qid in results:
+            print(f"Query #{qid} is part of dataset {self.task_metadata.name}, evaluated with metric {self.task_metadata.main_score}.")
+            print(f" - Query text snippet: {repr(self.queries[query_id_to_idx[qid]]['text'])[:150]}...")
+            print(f" - Ground truth scores: {qrels.get(qid, {}).items()}")
+            print(f" - Top retrieved documents:")
+            sorted_rels = sorted(results[qid].items(), key=lambda item: item[1], reverse=True)
+            for pid, score in sorted_rels[:10]:
+                print(f"    ---> Document #{pid} with (score, gt) ({score}, {qrels.get(qid, {}).get(pid, 0)}) -- text snippet: {repr(self.corpus[doc_id_to_idx[pid]]['text'])[:150]}...")
+            printed += 1
+            if printed >= 5:
+                break
+        '''
+
+        collector = MTEBDataCollector(
+            corpus=self.corpus,
+            queries=self.queries,
+            qrels=qrels,
+            results=results,
+            dataset_name=self.task_metadata.name,
+            scoring_metric=self.task_metadata.main_score,
+            hf_split=self.hf_split,
+            hf_subset=self.hf_subset,
+            top_k=self.top_k
+        )
+
+        collector.prepare()
+        collector.write_jsonl()
+
         return calculate_retrieval_scores(
             results, qrels, list(k_values), skip_first_result
         )
